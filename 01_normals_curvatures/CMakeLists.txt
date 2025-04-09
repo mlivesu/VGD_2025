@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.10)
+project(normals_curvatures)
+set(cinolib_DIR "/Users/cino/Documents/research/devel/lib/CinoLib/")
+set(CINOLIB_USES_OPENGL_GLFW_IMGUI ON)
+find_package(cinolib REQUIRED)
+add_executable(${PROJECT_NAME} main.cpp)
+target_link_libraries(${CMAKE_PROJECT_NAME} cinolib)
