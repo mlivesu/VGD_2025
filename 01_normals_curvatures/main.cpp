@@ -60,7 +60,7 @@ std::vector<double> mean_curvature(Trimesh<> & m)
             Hn += w*(m.vert(vid) - m.vert(nbr));
         }
         double A = 0;
-        for(uint pid : m.adj_v2p(vid)) A += m.poly_area(pid);
+        for(uint pid : m.adj_v2p(vid)) A += m.poly_area(pid)/3.0; // WARNING: approximated vertex area
         Hn /= 2.0*A;
         H.at(vid) = Hn.norm();
     }
@@ -135,13 +135,14 @@ int main(int argc, char **argv)
         }
         if(ImGui::Button("Show K"))
         {
-            // map K into [0,1], making sure that 0 maps to 0.5
-            ScalarField s(K);
             double MIN = std::min(-fabs(min_K),-fabs(max_K));
             double MAX = std::max( fabs(min_K), fabs(max_K));
-            for(uint vid=0; vid<m.num_verts(); ++vid) s[vid] = s[vid]-MIN/(MAX-MIN);
-            s.copy_to_mesh(m);
-            m.show_texture1D(TEXTURE_1D_HSV);
+            for(uint vid=0; vid<m.num_verts(); ++vid)
+            {
+                double k = K.at(vid)-MIN/(MAX-MIN);
+                m.vert_data(vid).color = Color::red_white_blue_ramp_01(k);
+            }
+            m.show_vert_color();
         }
         if(ImGui::Button("Show H"))
         {
