@@ -26,18 +26,18 @@ Eigen::SparseMatrix<double> Laplacian_matrix(const AbstractPolygonMesh<> & m)
 
 int main(int argc, char **argv)
 {
-    DrawableTrimesh<> m(argv[1]);
+    DrawableTrimesh<> m_ref(argv[1]);
+    DrawableTrimesh<> m = m_ref;
     m.show_vert_color();
 
-
     Eigen::SparseMatrix<double> L = Laplacian_matrix(m);
-    uint n_eigs = std::min(300, int(m.num_verts()/3));
+    uint max_eigs = std::min(300, int(m.num_verts()/3));
     std::vector<double> eigs, e_min, e_max;
-    matrix_eigenfunctions(L, true, n_eigs, eigs, e_min, e_max);
+    matrix_eigenfunctions(L, true, max_eigs, eigs, e_min, e_max);
 
     // pack eigenfunctions to a dense Eigen matrix
-    Eigen::MatrixXd E(m.num_verts(),n_eigs);
-    for(uint e=0; e<n_eigs; ++e)
+    Eigen::MatrixXd E(m.num_verts(),max_eigs);
+    for(uint e=0; e<max_eigs; ++e)
     {
         for(uint vid=0; vid<m.num_verts(); ++vid)
         {
@@ -68,11 +68,11 @@ int main(int argc, char **argv)
     gui.push(&m);
     gui.push(new SurfaceMeshControls<DrawableTrimesh<>>(&m,&gui));
 
-    int n_funcs = n_eigs;
+    int n_eigs = max_eigs;
     int f = 1;
     gui.callback_app_controls = [&]()
     {
-        if(ImGui::SliderInt("Eigenfunctions", &f, 1, n_eigs-1))
+        if(ImGui::SliderInt("Eigenfunctions", &f, 1, max_eigs-1))
         {
             for(uint vid=0; vid<m.num_verts(); ++vid)
             {
@@ -83,12 +83,12 @@ int main(int argc, char **argv)
             m.show_vert_color();
         }
 
-        if(ImGui::SliderInt("Reconstruction", &n_funcs, 1, n_eigs-1))
+        if(ImGui::SliderInt("Reconstruction", &n_eigs, 1, max_eigs-1))
         {
             for(uint vid=0; vid<m.num_verts(); ++vid)
             {
                 m.vert(vid) = vec3d(0,0,0);
-                for(int i=0; i<n_funcs; ++i)
+                for(int i=0; i<n_eigs; ++i)
                 {
                     m.vert(vid).x() += E.coeff(vid,i) * X_coeff.coeff(i,0);
                     m.vert(vid).y() += E.coeff(vid,i) * X_coeff.coeff(i,1);
@@ -96,7 +96,22 @@ int main(int argc, char **argv)
                 }
             }
             m.updateGL();
-        }                
+        }
+
+        if(ImGui::Button("Reconstruction Error"))
+        {
+            std::vector<double> err(m.num_verts(),max_double);
+            for(uint vid=0; vid<m.num_verts(); ++vid)
+            {
+                err.at(vid) = m.vert(vid).dist(m_ref.vert(vid));
+            }
+            double delta = m_ref.bbox().diag()/50.0;
+            for(uint vid=0; vid<m.num_verts(); ++vid)
+            {
+                m.vert_data(vid).color = Color::red_ramp_01((err.at(vid)/delta));
+            }
+            m.updateGL();
+        }
     };
 
     return gui.launch();
