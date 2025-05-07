@@ -28,6 +28,7 @@ int main(int argc, char **argv)
 {
     DrawableTrimesh<> m_ref(argv[1]);
     DrawableTrimesh<> m = m_ref;
+    m_ref.show_vert_color();
     m.show_vert_color();
 
     Eigen::SparseMatrix<double> L = Laplacian_matrix(m);
@@ -70,6 +71,7 @@ int main(int argc, char **argv)
 
     int n_eigs = max_eigs;
     int f = 1;
+    bool show_ref = false;
     gui.callback_app_controls = [&]()
     {
         if(ImGui::SliderInt("Eigenfunctions", &f, 1, max_eigs-1))
@@ -85,6 +87,11 @@ int main(int argc, char **argv)
 
         if(ImGui::SliderInt("Reconstruction", &n_eigs, 1, max_eigs-1))
         {
+            if(show_ref)
+            {
+                std::swap(m,m_ref);
+                show_ref = !show_ref;
+            }
             for(uint vid=0; vid<m.num_verts(); ++vid)
             {
                 m.vert(vid) = vec3d(0,0,0);
@@ -100,6 +107,8 @@ int main(int argc, char **argv)
 
         if(ImGui::Button("Reconstruction Error"))
         {
+            std::swap(m,m_ref);
+            show_ref = !show_ref;
             std::vector<double> err(m.num_verts(),max_double);
             for(uint vid=0; vid<m.num_verts(); ++vid)
             {
