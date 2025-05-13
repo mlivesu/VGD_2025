@@ -69,9 +69,22 @@ int main(int argc, char **argv)
         }
         if(key==GLFW_KEY_R)
         {
-            m = DrawableTrimesh<>(argv[1]);
+            m = m_ref;
             m.updateGL();
             return false;
+        }
+        if(key==GLFW_KEY_T)
+        {
+            m.copy_xyz_to_uvw(UVW_param);
+            m.vector_verts() = m_ref.vector_verts();
+            m.show_texture2D(TEXTURE_2D_ISOLINES,5.0);
+            return true;
+        }
+        if(key==GLFW_KEY_U)
+        {
+            m.copy_uvw_to_xyz(UVW_param);
+            m.updateGL();
+            return true;
         }
         return false;
     };
