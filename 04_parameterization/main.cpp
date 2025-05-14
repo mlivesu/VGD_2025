@@ -2,6 +2,7 @@
 #include <cinolib/gl/surface_mesh_controls.h>
 #include <cinolib/meshes/meshes.h>
 #include <cinolib/geometry/n_sided_poygon.h>
+#include <cinolib/linear_solvers.h>
 
 using namespace cinolib;
 
@@ -31,6 +32,30 @@ void laplacian(DrawableTrimesh<> & m, const int n_iters)
 
 //::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
+Eigen::SparseMatrix<double> laplacian_matrix(const DrawableTrimesh<> & m)
+{
+    std::vector<Eigen::Triplet<double>> entries;
+    uint nv = m.num_verts();
+    for(uint vid=0; vid<nv; ++vid)
+    {
+        entries.emplace_back(     vid,     vid,double(m.vert_valence(vid)));
+        entries.emplace_back(  nv+vid,  nv+vid,double(m.vert_valence(vid)));
+        entries.emplace_back(2*nv+vid,2*nv+vid,double(m.vert_valence(vid)));
+
+        for(uint nbr : m.adj_v2v(vid))
+        {
+            entries.emplace_back(     vid,     nbr,-1);
+            entries.emplace_back(  nv+vid,  nv+nbr,-1);
+            entries.emplace_back(2*nv+vid,2*nv+nbr,-1);
+        }
+    }
+    Eigen::SparseMatrix<double> L(m.num_verts()*3,m.num_verts()*3);
+    L.setFromTriplets(entries.begin(),entries.end());
+    return L;
+}
+
+//::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
 int main(int argc, char **argv)
 {
     DrawableTrimesh<> m(argv[1]);
@@ -43,10 +68,31 @@ int main(int argc, char **argv)
     gui.push(&m);
     gui.push(new SurfaceMeshControls<DrawableTrimesh<>>(&m,&gui));
 
+    bool og_normals = true;
     int n_iters = 1;
     gui.callback_app_controls = [&]()
     {
         if(ImGui::SliderInt("Iters",&n_iters,1,100)){}
+
+        if(ImGui::Checkbox("OG Normals",&og_normals))
+        {
+            if(og_normals)
+            {
+                for(uint pid=0; pid<m.num_polys(); ++pid)
+                {
+                    m.poly_data(pid).normal = m_ref.poly_data(pid).normal;
+                }
+                for(uint vid=0; vid<m.num_verts(); ++vid)
+                {
+                    m.vert_data(vid).normal = m_ref.vert_data(vid).normal;
+                }
+            }
+            else
+            {
+                m.update_normals();
+            }
+            m.updateGL();
+        }
     };
 
     gui.callback_key_pressed = [&](int key, int modifiers) -> bool
@@ -83,6 +129,32 @@ int main(int argc, char **argv)
         if(key==GLFW_KEY_U)
         {
             m.copy_uvw_to_xyz(UVW_param);
+            m.updateGL();
+            return true;
+        }
+        if(key==GLFW_KEY_L)
+        {
+            Eigen::SparseMatrix<double> L = laplacian_matrix(m);
+            Eigen::VectorXd xyz;
+            Eigen::VectorXd rhs = Eigen::VectorXd::Zero(m.num_verts()*3);
+
+            std::map<uint,double> bcs;
+            uint nv = m.num_verts();
+            for(uint i=0; i<boundary.size(); ++i)
+            {
+                uint vid = boundary.at(i);
+                bcs[     vid] = circle.at(i).x();
+                bcs[  nv+vid] = circle.at(i).y();
+                bcs[2*nv+vid] = circle.at(i).z();
+            }
+
+            solve_square_system_with_bc(L,rhs,xyz,bcs);
+            for(uint vid=0; vid<m.num_verts(); ++vid)
+            {
+                m.vert(vid) = vec3d(xyz[     vid],
+                                    xyz[  nv+vid],
+                                    xyz[2*nv+vid]);
+            }
             m.updateGL();
             return true;
         }
