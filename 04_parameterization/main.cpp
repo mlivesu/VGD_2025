@@ -3,8 +3,11 @@
 #include <cinolib/meshes/meshes.h>
 #include <cinolib/geometry/n_sided_poygon.h>
 #include <cinolib/linear_solvers.h>
+#include <cinolib/profiler.h>
 
 using namespace cinolib;
+
+Profiler p;
 
 //::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
@@ -32,7 +35,7 @@ void laplacian(DrawableTrimesh<> & m, const int n_iters)
 
 //::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
-Eigen::SparseMatrix<double> laplacian_matrix(const DrawableTrimesh<> & m)
+Eigen::SparseMatrix<double> laplacian_matrix3(const DrawableTrimesh<> & m)
 {
     std::vector<Eigen::Triplet<double>> entries;
     uint nv = m.num_verts();
@@ -52,6 +55,105 @@ Eigen::SparseMatrix<double> laplacian_matrix(const DrawableTrimesh<> & m)
     Eigen::SparseMatrix<double> L(m.num_verts()*3,m.num_verts()*3);
     L.setFromTriplets(entries.begin(),entries.end());
     return L;
+}
+
+//::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+Eigen::SparseMatrix<double> laplacian_matrix(const DrawableTrimesh<> & m)
+{
+    std::vector<Eigen::Triplet<double>> entries;
+    uint nv = m.num_verts();
+    for(uint vid=0; vid<nv; ++vid)
+    {
+        entries.emplace_back(vid,vid,double(m.vert_valence(vid)));
+
+        for(uint nbr : m.adj_v2v(vid))
+        {
+            entries.emplace_back(vid,nbr,-1);
+        }
+    }
+    Eigen::SparseMatrix<double> L(m.num_verts(),m.num_verts());
+    L.setFromTriplets(entries.begin(),entries.end());
+    return L;
+}
+
+//::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+void solve(const Eigen::SparseMatrix<double> & L,
+           const Eigen::VectorXd             & rhs_x,
+           const Eigen::VectorXd             & rhs_y,
+           const std::map<uint,double>       & bc_x,
+           const std::map<uint,double>       & bc_y,
+                 Eigen::VectorXd             & x,
+                 Eigen::VectorXd             & y)
+{
+    std::vector<int> col_map(L.rows(), 0);
+    for(const auto & obj : bc_x)
+    {
+        col_map[obj.first] = -1;
+    }
+    uint fresh_id = 0;
+    for(uint col=0; col<L.cols(); ++col)
+    {
+        if(col_map.at(col)==0)
+        {
+            col_map[col] = fresh_id++;
+        }
+    }
+
+    uint size = uint(L.rows() - bc_x.size());
+    Eigen::VectorXd rhs_x_prime = Eigen::VectorXd::Zero(size);
+    Eigen::VectorXd rhs_y_prime = Eigen::VectorXd::Zero(size);
+
+    std::vector<Entry> entries;
+
+    // iterate over the non-zero entries of sparse matrix A
+    for(uint i=0; i<L.outerSize(); ++i)
+    {
+        for(Eigen::SparseMatrix<double>::InnerIterator it(L,i); it; ++it)
+        {
+            uint   row = uint(it.row());
+            uint   col = uint(it.col());
+            double val = it.value();
+
+            // Laplacian of a constrained vertex
+            if(col_map[row]<0) continue;
+
+            if(col_map[col]<0)
+            {
+                rhs_x_prime[col_map[row]] -= bc_x.at(col) * val;
+                rhs_y_prime[col_map[row]] -= bc_y.at(col) * val;
+            }
+            else
+            {
+                entries.emplace_back(col_map[row],col_map[col],val);
+            }
+        }
+    }
+
+    Eigen::SparseMatrix<double> Aprime(size, size);
+    Aprime.setFromTriplets(entries.begin(), entries.end());
+
+    Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> solver(Aprime);
+    assert(solver.info() == Eigen::Success);
+    Eigen::VectorXd tmp_x = solver.solve(rhs_x_prime).eval();
+    Eigen::VectorXd tmp_y = solver.solve(rhs_y_prime).eval();
+
+    x.resize(L.cols());
+    y.resize(L.cols());
+    for(uint col=0; col<L.cols(); ++col)
+    {
+        if(col_map[col]>=0)
+        {
+            x[col] = tmp_x[col_map[col]];
+            y[col] = tmp_y[col_map[col]];
+        }
+        else
+        {
+            x[col] = bc_x.at(col);
+            y[col] = bc_y.at(col);
+        }
+    }
 }
 
 //::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
@@ -134,26 +236,60 @@ int main(int argc, char **argv)
         }
         if(key==GLFW_KEY_L)
         {
-            Eigen::SparseMatrix<double> L = laplacian_matrix(m);
-            Eigen::VectorXd xyz;
-            Eigen::VectorXd rhs = Eigen::VectorXd::Zero(m.num_verts()*3);
-
-            std::map<uint,double> bcs;
+            Eigen::SparseMatrix<double> L = laplacian_matrix3(m);
+            std::map<uint,double> bc;
             uint nv = m.num_verts();
             for(uint i=0; i<boundary.size(); ++i)
             {
                 uint vid = boundary.at(i);
-                bcs[     vid] = circle.at(i).x();
-                bcs[  nv+vid] = circle.at(i).y();
-                bcs[2*nv+vid] = circle.at(i).z();
+                bc[     vid] = circle.at(i).x();
+                bc[  nv+vid] = circle.at(i).y();
+                bc[2*nv+vid] = circle.at(i).z();
             }
 
-            solve_square_system_with_bc(L,rhs,xyz,bcs);
+            Eigen::VectorXd xyz;
+            Eigen::VectorXd rhs = Eigen::VectorXd::Zero(nv*3);
+            p.push("solve3");
+            solve_square_system_with_bc(L,rhs,xyz,bc);
+            p.pop();
+
             for(uint vid=0; vid<m.num_verts(); ++vid)
             {
                 m.vert(vid) = vec3d(xyz[     vid],
                                     xyz[  nv+vid],
                                     xyz[2*nv+vid]);
+            }
+            m.updateGL();
+            return true;
+        }
+        if(key==GLFW_KEY_P)
+        {
+            Eigen::SparseMatrix<double> L = laplacian_matrix(m);
+
+            std::map<uint,double> bc_x,bc_y;
+            for(uint i=0; i<boundary.size(); ++i)
+            {
+                uint vid = boundary.at(i);
+                bc_x[vid] = circle.at(i).x();
+                bc_y[vid] = circle.at(i).y();
+            }
+
+            Eigen::VectorXd x,y;
+            Eigen::VectorXd rhs_x = Eigen::VectorXd::Zero(m.num_verts());
+            Eigen::VectorXd rhs_y = Eigen::VectorXd::Zero(m.num_verts());
+
+            // p.push("solve");
+            // solve_square_system_with_bc(L,rhs_x,x,bc_x);
+            // solve_square_system_with_bc(L,rhs_y,y,bc_y);
+            // p.pop();
+
+            p.push("solve");
+            solve(L,rhs_x,rhs_y,bc_x,bc_y,x,y);
+            p.pop();
+
+            for(uint vid=0; vid<m.num_verts(); ++vid)
+            {
+                m.vert(vid) = vec3d(x[vid],y[vid],0);
             }
             m.updateGL();
             return true;
